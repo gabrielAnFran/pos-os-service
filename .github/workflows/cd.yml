@@ -1,0 +1,67 @@
+name: CD
+
+# Runs on a self-hosted runner registered against this repo, reachable to a
+# local `kind` Kubernetes cluster + local registry (`localhost:5001`) on the
+# runner's own machine. This is a stand-in for the live Magalu Cloud cluster
+# used in Phase 3 (`project1-infra-k8s`), which is currently torn down —
+# see docs/adr for the note on this. The pipeline shape (build -> push ->
+# helm upgrade -> rollout verification) is the same either way; only the
+# target cluster/registry differ.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, local-kind]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images
+        run: |
+          set -eu
+          for target in server worker outbox-dispatcher; do
+            docker build --build-arg TARGET=$target \
+              -t localhost:5001/pos-os-service:${target}-${{ github.sha }} .
+          done
+
+      - name: Push images to local registry
+        run: |
+          set -eu
+          for target in server worker outbox-dispatcher; do
+            docker push localhost:5001/pos-os-service:${target}-${{ github.sha }}
+          done
+
+      - name: Deploy with Helm
+        run: |
+          set -eu
+          helm upgrade --install os-service ./charts/os-service \
+            -n pos-dev --create-namespace \
+            --set image.repository=localhost:5001/pos-os-service \
+            --set image.tags.server=server-${{ github.sha }} \
+            --set image.tags.worker=worker-${{ github.sha }} \
+            --set image.tags.dispatcher=outbox-dispatcher-${{ github.sha }} \
+            --set secret.dbDSN="host=postgres.pos-dev.svc.cluster.local user=postgres password=postgres dbname=os_service port=5432 sslmode=disable" \
+            --set secret.amqpURL="amqp://guest:guest@rabbitmq.pos-dev.svc.cluster.local:5672/" \
+            --wait --timeout 180s
+
+      - name: Verify rollout
+        run: |
+          set -eu
+          kubectl -n pos-dev rollout status deployment/os-service-os-service-server --timeout=120s
+          kubectl -n pos-dev rollout status deployment/os-service-os-service-worker --timeout=120s
+          kubectl -n pos-dev rollout status deployment/os-service-os-service-dispatcher --timeout=120s
+
+      - name: Smoke test (health check through the deployed pod)
+        run: |
+          set -eu
+          kubectl -n pos-dev port-forward svc/os-service-os-service-server 18081:8081 &
+          PF_PID=$!
+          sleep 3
+          curl -sf http://localhost:18081/healthz
+          echo
+          curl -sf http://localhost:18081/readyz
+          echo
+          kill $PF_PID
