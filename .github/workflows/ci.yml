@@ -115,6 +115,17 @@ jobs:
           done
           echo "SonarQube did not become ready in time" >&2
           exit 1
+      - name: change default admin password and generate a CI token
+        run: |
+          set -eu
+          curl -sf -u admin:admin -X POST "http://localhost:9000/api/users/change_password" \
+            --data-urlencode "login=admin" \
+            --data-urlencode "previousPassword=admin" \
+            --data-urlencode "password=CiTemp1234!"
+          token_json=$(curl -sf -u admin:CiTemp1234! -X POST "http://localhost:9000/api/user_tokens/generate?name=ci-$(date +%s)")
+          token=$(echo "$token_json" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+          echo "::add-mask::$token"
+          echo "SONAR_TOKEN=$token" >> "$GITHUB_ENV"
       - name: run sonar-scanner
         run: |
           docker run --rm --network=host -v "$PWD:/usr/src" sonarsource/sonar-scanner-cli:latest \
@@ -122,11 +133,11 @@ jobs:
               -Dsonar.projectKey=pos-os-service \
               -Dsonar.sources=/usr/src \
               -Dsonar.host.url=http://localhost:9000 \
-              -Dsonar.login=admin -Dsonar.password=admin \
+              -Dsonar.token="$SONAR_TOKEN" \
               -Dsonar.go.coverage.reportPaths=/usr/src/coverage.out
       - name: check quality gate
         run: |
           sleep 5
-          curl -s -u admin:admin "http://localhost:9000/api/qualitygates/project_status?projectKey=pos-os-service" | tee /tmp/gate.json
+          curl -s -u "$SONAR_TOKEN:" "http://localhost:9000/api/qualitygates/project_status?projectKey=pos-os-service" | tee /tmp/gate.json
           echo
           echo "Quality gate status: $(grep -o '"status":"[A-Z]*"' /tmp/gate.json | head -1)"
