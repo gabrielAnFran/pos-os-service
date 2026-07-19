@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-os-service-config
+  labels:
+    app.kubernetes.io/name: os-service
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  OS_PORT: {{ .Values.env.OS_PORT | quote }}
+  OS_DISPATCH_INTERVAL_MS: {{ .Values.env.OS_DISPATCH_INTERVAL_MS | quote }}

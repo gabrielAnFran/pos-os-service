@@ -1,0 +1,6 @@
+apiVersion: v2
+name: os-service
+description: Helm chart for the Ordem de Servico (OS) microservice
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

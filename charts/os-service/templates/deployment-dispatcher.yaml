@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-os-service-dispatcher
+  labels:
+    app.kubernetes.io/name: os-service-dispatcher
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.dispatcher.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: os-service-dispatcher
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: os-service-dispatcher
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: dispatcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tags.dispatcher }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-os-service-config
+            - secretRef:
+                name: {{ .Release.Name }}-os-service-secret
+          resources:
+            {{- toYaml .Values.dispatcher.resources | nindent 12 }}

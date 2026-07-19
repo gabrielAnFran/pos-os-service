@@ -1,0 +1,257 @@
+openapi: 3.0.3
+info:
+  title: OS Service API
+  description: Microsservico de Ordem de Servico (OS) do PDV da oficina mecanica.
+  version: "0.1.0"
+servers:
+  - url: /api/v1
+paths:
+  /orders:
+    post:
+      summary: Cria uma nova ordem de servico (OS)
+      operationId: createOrder
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: Ordem criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateOrderResponse'
+        '400':
+          description: Requisicao invalida
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Idempotency-Key reutilizada com um corpo de requisicao diferente
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    get:
+      summary: Lista ordens (paginacao por cursor)
+      operationId: listOrders
+      parameters:
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/OrderStatus'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lista de ordens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderListResponse'
+        '400':
+          description: Parametros de query invalidos
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /orders/{id}:
+    get:
+      summary: Busca uma ordem por id, incluindo o historico de status
+      operationId: getOrder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Ordem encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '404':
+          description: Ordem nao encontrada
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /orders/{id}/status:
+    patch:
+      summary: Transiciona o status de uma ordem (uso interno, disparado pelo orquestrador da saga)
+      operationId: updateOrderStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStatusRequest'
+      responses:
+        '200':
+          description: Ordem atualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          description: Transicao de status invalida
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: Ordem nao encontrada
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+components:
+  schemas:
+    OrderStatus:
+      type: string
+      enum:
+        - CREATED
+        - BUDGETING
+        - AWAITING_APPROVAL
+        - APPROVED
+        - PAYING
+        - PAID
+        - IN_EXECUTION
+        - COMPLETED
+        - CANCELLED
+        - FAILED
+
+    CreateOrderRequest:
+      type: object
+      required: [customer_id, vehicle_id, description]
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        vehicle_id:
+          type: string
+          format: uuid
+        description:
+          type: string
+
+    CreateOrderResponse:
+      type: object
+      properties:
+        os_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+
+    UpdateStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        reason:
+          type: string
+
+    StatusHistoryEntry:
+      type: object
+      properties:
+        from_status:
+          type: string
+        to_status:
+          type: string
+        reason:
+          type: string
+        changed_at:
+          type: string
+          format: date-time
+
+    OrderResponse:
+      type: object
+      properties:
+        os_id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        vehicle_id:
+          type: string
+          format: uuid
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/StatusHistoryEntry'
+
+    OrderListResponse:
+      type: object
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderResponse'
+        next_cursor:
+          type: string
+
+    Problem:
+      type: object
+      description: Corpo de erro no formato RFC 7807 (problem+json)
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string

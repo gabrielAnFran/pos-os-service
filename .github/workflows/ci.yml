@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt
+        run: |
+          fmt_out="$(gofmt -l .)"
+          if [ -n "$fmt_out" ]; then
+            echo "The following files are not gofmt'd:"
+            echo "$fmt_out"
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: os_service
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: go test with coverage
+        run: go test ./... -coverprofile=coverage.out
+        env:
+          OS_DB_DSN: "host=localhost user=postgres password=postgres dbname=os_service port=5432 sslmode=disable"
+          OS_AMQP_URL: "amqp://guest:guest@localhost:5672/"
+      - name: print coverage
+        run: go tool cover -func=coverage.out | tail -1
+      - name: upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build (server)
+        run: docker build --build-arg TARGET=server -t pos-os-service:server .
+      - name: docker build (outbox-dispatcher)
+        run: docker build --build-arg TARGET=outbox-dispatcher -t pos-os-service:outbox-dispatcher .
+      - name: docker build (worker)
+        run: docker build --build-arg TARGET=worker -t pos-os-service:worker .
