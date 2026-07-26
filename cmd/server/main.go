@@ -75,7 +75,7 @@ func main() {
 	r.GET("/healthz", handler.Healthz)
 	r.GET("/readyz", handler.Readyz)
 
-	srv := &http.Server{Addr: ":" + cfg.Port, Handler: r}
+	srv := &http.Server{Addr: ":" + cfg.Port, Handler: r, ReadHeaderTimeout: 5 * time.Second}
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
