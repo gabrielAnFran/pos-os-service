@@ -5,41 +5,26 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/gabrielAnFran/pos-os-service/internal/application/usecases"
 	infradb "github.com/gabrielAnFran/pos-os-service/internal/infrastructure/db"
 	"github.com/gabrielAnFran/pos-os-service/internal/infrastructure/messaging"
-	"github.com/golang-migrate/migrate/v4"
-	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// TestCreateOrder_OutboxDispatch_EndToEnd spins up real Postgres and RabbitMQ
-// containers, exercises CreateOrder, confirms an outbox row is written, then
-// runs one dispatch cycle and verifies the OSCreated event reaches a queue
-// bound to pos.events with routing key OSCreated. Run with:
+// TestCreateOrder_OutboxDispatch_EndToEnd exercises CreateOrder against the
+// shared Postgres and RabbitMQ containers, confirms an outbox row is
+// written, then runs one dispatch cycle and verifies the OSCreated event
+// reaches a queue bound to pos.events with routing key OSCreated. Run with:
 //
 //	go test -tags integration ./tests/integration/...
 func TestCreateOrder_OutboxDispatch_EndToEnd(t *testing.T) {
 	ctx := context.Background()
-
-	pgContainer, dsn := startPostgres(ctx, t)
-	defer func() { _ = pgContainer.Terminate(ctx) }()
-
-	amqpContainer, amqpURL := startRabbitMQ(ctx, t)
-	defer func() { _ = amqpContainer.Terminate(ctx) }()
-
-	require.NoError(t, runMigrations(dsn))
-
-	gormDB, err := infradb.Connect(dsn)
-	require.NoError(t, err)
+	gormDB := newTestDB(t)
+	truncateAll(t, gormDB)
 
 	repo := infradb.NewOrderRepository(gormDB)
 	createOrderUC := usecases.NewCreateOrderUseCase(repo)
@@ -52,7 +37,7 @@ func TestCreateOrder_OutboxDispatch_EndToEnd(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "OSCreated", rows[0].EventName)
 
-	amqpConn, err := messaging.Dial(amqpURL)
+	amqpConn, err := messaging.Dial(testAMQPURL)
 	require.NoError(t, err)
 	defer amqpConn.Close()
 
@@ -78,71 +63,6 @@ func TestCreateOrder_OutboxDispatch_EndToEnd(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for OSCreated event")
 	}
-}
-
-func startPostgres(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
-	t.Helper()
-	req := testcontainers.ContainerRequest{
-		Image:        "postgres:16-alpine",
-		ExposedPorts: []string{"5432/tcp"},
-		Env: map[string]string{
-			"POSTGRES_USER":     "postgres",
-			"POSTGRES_PASSWORD": "postgres",
-			"POSTGRES_DB":       "os_service",
-		},
-		WaitingFor: wait.ForListeningPort("5432/tcp").WithStartupTimeout(60 * time.Second),
-	}
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
-	require.NoError(t, err)
-
-	host, err := c.Host(ctx)
-	require.NoError(t, err)
-	port, err := c.MappedPort(ctx, "5432")
-	require.NoError(t, err)
-
-	dsn := fmt.Sprintf("host=%s user=postgres password=postgres dbname=os_service port=%s sslmode=disable", host, port.Port())
-	return c, dsn
-}
-
-func startRabbitMQ(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
-	t.Helper()
-	req := testcontainers.ContainerRequest{
-		Image:        "rabbitmq:3-management-alpine",
-		ExposedPorts: []string{"5672/tcp"},
-		WaitingFor:   wait.ForListeningPort("5672/tcp").WithStartupTimeout(60 * time.Second),
-	}
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
-	require.NoError(t, err)
-
-	host, err := c.Host(ctx)
-	require.NoError(t, err)
-	port, err := c.MappedPort(ctx, "5672")
-	require.NoError(t, err)
-
-	return c, fmt.Sprintf("amqp://guest:guest@%s:%s/", host, port.Port())
-}
-
-func runMigrations(dsn string) error {
-	dbConn, err := infradb.Connect(dsn)
-	if err != nil {
-		return err
-	}
-	sqlDB, err := dbConn.DB()
-	if err != nil {
-		return err
-	}
-	driver, err := migratepg.WithInstance(sqlDB, &migratepg.Config{})
-	if err != nil {
-		return err
-	}
-	m, err := migrate.NewWithDatabaseInstance("file://../../migrations", "postgres", driver)
-	if err != nil {
-		return err
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return err
-	}
-	return nil
 }
 
 func mustExtractOSID(t *testing.T, ev messaging.Event) string {
