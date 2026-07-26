@@ -118,12 +118,25 @@ jobs:
       - name: change default admin password and generate a CI token
         run: |
           set -eu
-          curl -sf -u admin:admin -X POST "http://localhost:9000/api/users/change_password" \
+          new_pass='CiTempPass1234!'
+          http_code=$(curl -s -o /tmp/change_pw.json -w '%{http_code}' -u admin:admin -X POST "http://localhost:9000/api/users/change_password" \
             --data-urlencode "login=admin" \
             --data-urlencode "previousPassword=admin" \
-            --data-urlencode "password=CiTemp1234!"
-          token_json=$(curl -sf -u admin:CiTemp1234! -X POST "http://localhost:9000/api/user_tokens/generate?name=ci-$(date +%s)")
-          token=$(echo "$token_json" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+            --data-urlencode "password=$new_pass")
+          echo "change_password HTTP $http_code"
+          cat /tmp/change_pw.json; echo
+          if [ "$http_code" != "204" ] && [ "$http_code" != "200" ]; then
+            echo "::error::change_password failed with HTTP $http_code" >&2
+            exit 1
+          fi
+          token_http_code=$(curl -s -o /tmp/token.json -w '%{http_code}' -u "admin:$new_pass" -X POST "http://localhost:9000/api/user_tokens/generate?name=ci-$(date +%s)")
+          echo "generate token HTTP $token_http_code"
+          if [ "$token_http_code" != "200" ]; then
+            cat /tmp/token.json; echo
+            echo "::error::user_tokens/generate failed with HTTP $token_http_code" >&2
+            exit 1
+          fi
+          token=$(grep -o '"token":"[^"]*"' /tmp/token.json | cut -d'"' -f4)
           echo "::add-mask::$token"
           echo "SONAR_TOKEN=$token" >> "$GITHUB_ENV"
       - name: run sonar-scanner
