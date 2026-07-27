@@ -115,47 +115,52 @@ Todos os erros seguem o formato `application/problem+json` (RFC 7807).
 ## Testes
 
 ```bash
-go test ./...                          # apenas testes unitarios, sem dependencias externas, rapido
-go test -tags integration ./tests/...  # sobe Postgres + RabbitMQ reais via testcontainers-go, precisa de Docker
+go test ./...                                              # apenas testes unitarios, sem dependencias externas, rapido
+go test -tags=integration ./... -coverpkg=./...            # unitarios + integracao (testcontainers-go: Postgres + RabbitMQ reais), precisa de Docker
 ```
 
 O teste de integracao em `tests/integration/` fica atras da build tag
 `integration` justamente para que `go test ./...` continue rapido e sem
-dependencias externas; ele **nao foi executado neste ambiente** porque nao
-havia um daemon Docker disponivel localmente (`docker info` falhou) — o
-codigo compila (`go build -tags integration ./...` esta verde) e esta
-integrado ao `make test-integration`, mas nao foi executado ponta a ponta
-aqui. Deve ser rodado no CI ou em uma maquina com Docker antes de confiar
-nele.
+dependencias externas. Ele roda de verdade no CI (`.github/workflows/ci.yml`,
+job `test`) a cada push/PR, contra Postgres e RabbitMQ dockerizados via
+testcontainers-go — sem precisar de nenhum servico externo alem do Docker
+do proprio runner.
 
 ### Cobertura
 
-A cobertura de statements do repositorio inteiro, via
-`go test ./... -coverprofile=coverage.out`, e de **15.2%**. Esse numero e
-baixo porque e uma media combinada entre todos os pacotes, incluindo
-`cmd/server`, `cmd/worker`, `cmd/outbox-dispatcher`,
-`internal/infrastructure/db`, `internal/presentation/handlers` e outros
-codigos de wiring/IO que foram deliberadamente deixados para o teste de
-integracao (que depende de Docker) em vez de testes unitarios, conforme o
-plano de testes deste servico. Os pacotes de fato cobertos por testes
-unitarios tem numeros bem mais altos:
+Medido em 2026-07-26 via `go test -tags=integration ./... -coverpkg=./...
+-coverprofile=coverage.out` (unitarios + integracao juntos, o mesmo comando
+que o CI roda): **62,2%** do repositorio inteiro.
 
-| Pacote                                      | Cobertura |
-|-----------------------------------------------|-----------|
-| `internal/domain/entities`                    | 94.4%     |
-| `internal/application/usecases`               | 78.8%     |
-| `internal/presentation/middleware`            | 55.1%     |
+Esse numero fica abaixo dos 80% porque inclui `cmd/server`, `cmd/worker` e
+`cmd/outbox-dispatcher` (~316 linhas de wiring de `main()`, sem logica
+propria) — deixados sem teste de proposito, ja que testa-los exigiria um
+refactor so pra extrair logica testavel, sem ganho real de confianca. O que
+importa pra corretude — endpoints REST, casos de uso e dominio — esta bem
+acima de 80% em todos os pacotes:
+
+| Pacote                               | Cobertura | Como |
+|---------------------------------------|-----------|------|
+| `internal/domain/entities`            | 94,4%     | unit |
+| `internal/application/usecases`       | 78,8%     | unit |
+| `internal/presentation/handlers`      | 92,7%     | unit (httptest + fakes) |
+| `internal/presentation/middleware`    | 91,8%     | unit (httptest) |
+| `internal/presentation/dto`           | 100%      | unit |
+| `internal/infrastructure/config`      | 100%      | unit |
+| `internal/infrastructure/db`          | 93,0%     | integracao (testcontainers) |
+| `internal/infrastructure/messaging`   | 77,2%     | integracao (testcontainers) |
+| `cmd/*`                                | 0%        | fora de escopo (wiring) |
 
 `internal/domain/entities` cobre todas as entradas da tabela de transicao de
 status (validas e invalidas), alem da rejeicao de qualquer transicao a
 partir de estados terminais. `internal/application/usecases` cobre
 `CreateOrder` e `HandleCancelOS` (sucesso, replay idempotente, ordem nao
-encontrada, transicao invalida) usando um fake de repositorio em memoria
-feito a mao. `internal/presentation/middleware` cobre os tres ramos de
-idempotencia (chave nova, mesma chave/hash repetindo a resposta, mesma
-chave/hash diferente gerando conflito); os helpers `Recovery`/`Logging` sao
-wrappers finos do gin, sem teste unitario proprio (0% cada), o que puxa o
-numero desse pacote para baixo.
+encontrada, transicao invalida). `internal/presentation/handlers` cobre
+todos os endpoints REST via `httptest` + fakes em memoria. Os testes de
+integracao em `tests/integration/` (testcontainers-go, Postgres + RabbitMQ
+reais) cobrem `OrderRepository`/`OutboxRepository`/`IdempotencyRepository`/
+`ProcessedEventRepository` e o helper `messaging.Conn` (publish/consume,
+retry ate `MaxRetries`, DLQ).
 
 ## Notas de desenvolvimento / desvios da especificacao
 
